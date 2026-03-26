@@ -45,11 +45,51 @@ func PrintText(result *model.SearchResult) {
 
 // PrintJSON renders a SearchResult as pretty-printed JSON to stdout.
 func PrintJSON(result *model.SearchResult) error {
-	enc := json.NewEncoder(nil)
-	_ = enc
 	b, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to encode results as JSON: %w", err)
+	}
+	fmt.Println(string(b))
+	return nil
+}
+
+// PrintDateRangeText renders a DateRangeResult as a human-readable price table.
+func PrintDateRangeText(result *model.DateRangeResult) {
+	fmt.Printf("📅 %s → %s  |  %s to %s\n",
+		result.Origin, result.Destination, result.FromDate, result.ToDate)
+	fmt.Println(divider)
+
+	if len(result.Dates) == 0 {
+		fmt.Println("No flights found for any date in range.")
+		return
+	}
+
+	// Find cheapest date for highlight
+	minPrice := result.Dates[0].Price
+	for _, dp := range result.Dates[1:] {
+		if dp.Price < minPrice {
+			minPrice = dp.Price
+		}
+	}
+
+	for _, dp := range result.Dates {
+		tag := ""
+		if dp.Price == minPrice {
+			tag = " ⭐ cheapest"
+		}
+		stopLabel := formatStops(dp.Stops)
+		fmt.Printf("  %s  💰 %s %.0f  ✈ %s  ⏱ %s  %s%s\n",
+			dp.Date, dp.Currency, dp.Price, dp.Airline, dp.Duration, stopLabel, tag)
+	}
+	fmt.Println(divider)
+	fmt.Printf("Total: %d dates with available flights\n", len(result.Dates))
+}
+
+// PrintDateRangeJSON renders a DateRangeResult as pretty-printed JSON to stdout.
+func PrintDateRangeJSON(result *model.DateRangeResult) error {
+	b, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode date range results as JSON: %w", err)
 	}
 	fmt.Println(string(b))
 	return nil
