@@ -25,6 +25,13 @@ import (
 )
 
 const (
+	// maxDateRangeDays caps the date range to avoid hammering Google.
+	maxDateRangeDays = 61
+	// dateRangeDelay is the pause between requests during date-range scans.
+	dateRangeDelay = 500 * time.Millisecond
+)
+
+const (
 	rpcEndpoint = "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults"
 	userAgent   = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	timeout     = 30 * time.Second
@@ -75,6 +82,78 @@ func (s *GoogleFlightsScraper) Search(params model.SearchParams) (*model.SearchR
 		PriceTrend:  priceTrend,
 		Flights:     flights,
 	}, nil
+}
+
+// SearchDateRange iterates over each date in [params.FromDate, params.ToDate] and
+// returns the cheapest flight option per date. Requests are rate-limited by
+// dateRangeDelay to be polite to Google's servers.
+//
+// Maximum range is maxDateRangeDays (61 days). Dates that return no results
+// are silently skipped.
+func (s *GoogleFlightsScraper) SearchDateRange(params model.DateRangeParams) (*model.DateRangeResult, error) {
+	const layout = "2006-01-02"
+
+	from, err := time.Parse(layout, params.FromDate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid from-date %q: %w", params.FromDate, err)
+	}
+	to, err := time.Parse(layout, params.ToDate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid to-date %q: %w", params.ToDate, err)
+	}
+	if to.Before(from) {
+		return nil, fmt.Errorf("to-date must be on or after from-date")
+	}
+	days := int(to.Sub(from).Hours()/24) + 1
+	if days > maxDateRangeDays {
+		return nil, fmt.Errorf("date range too large (%d days); maximum is %d", days, maxDateRangeDays)
+	}
+
+	result := &model.DateRangeResult{
+		Origin:      params.Origin,
+		Destination: params.Destination,
+		FromDate:    params.FromDate,
+		ToDate:      params.ToDate,
+	}
+
+	for d := 0; d < days; d++ {
+		date := from.AddDate(0, 0, d).Format(layout)
+
+		searchParams := model.SearchParams{
+			Origin:      params.Origin,
+			Destination: params.Destination,
+			Date:        date,
+			Adults:      params.Adults,
+			Children:    params.Children,
+			Class:       params.Class,
+			Limit:       1, // cheapest only
+		}
+
+		sr, err := s.Search(searchParams)
+		if err != nil || len(sr.Flights) == 0 {
+			// Skip dates with no results or errors (network blip etc.)
+			if d < days-1 {
+				time.Sleep(dateRangeDelay)
+			}
+			continue
+		}
+
+		cheapest := sr.Flights[0]
+		result.Dates = append(result.Dates, model.DatePrice{
+			Date:     date,
+			Price:    cheapest.Price,
+			Currency: cheapest.Currency,
+			Airline:  cheapest.Airline,
+			Duration: cheapest.Duration,
+			Stops:    cheapest.Stops,
+		})
+
+		if d < days-1 {
+			time.Sleep(dateRangeDelay)
+		}
+	}
+
+	return result, nil
 }
 
 // fetchFlights sends the POST request and returns the raw (prefix-stripped) JSON string.

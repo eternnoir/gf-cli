@@ -51,3 +51,33 @@ type SearchResult struct {
 	PriceTrend  string   `json:"price_trend,omitempty"` // e.g. "low", "typical", "high"
 	Flights     []Flight `json:"flights"`
 }
+
+// DatePrice represents the cheapest flight found for a specific date.
+type DatePrice struct {
+	Date     string  `json:"date"`
+	Price    float64 `json:"price"`
+	Currency string  `json:"currency"`
+	Airline  string  `json:"airline"`
+	Duration string  `json:"duration"`
+	Stops    int     `json:"stops"`
+}
+
+// DateRangeParams holds parameters for a date-range price search.
+type DateRangeParams struct {
+	Origin      string
+	Destination string
+	FromDate    string // YYYY-MM-DD, start of range
+	ToDate      string // YYYY-MM-DD, end of range (inclusive)
+	Adults      int
+	Children    int
+	Class       SeatClass
+}
+
+// DateRangeResult holds cheapest-flight data across a date range.
+type DateRangeResult struct {
+	Origin      string      `json:"origin"`
+	Destination string      `json:"destination"`
+	FromDate    string      `json:"from_date"`
+	ToDate      string      `json:"to_date"`
+	Dates       []DatePrice `json:"dates"`
+}
