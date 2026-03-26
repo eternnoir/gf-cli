@@ -28,6 +28,7 @@
 package scraper
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -126,7 +127,7 @@ func buildFlights(inner []interface{}) ([]model.Flight, error) {
 				arrDate = ""
 			}
 
-			price := extractPrice(k)
+			price, currency := extractPriceAndCurrency(k)
 
 			// Deduplicate
 			key := fmt.Sprintf("%s|%s|%.0f", airline, depTime, price)
@@ -143,7 +144,7 @@ func buildFlights(inner []interface{}) ([]model.Flight, error) {
 				Duration:      duration,
 				Stops:         stops,
 				Price:         price,
-				Currency:      "USD",
+				Currency:      currency,
 			})
 		}
 	}
@@ -221,22 +222,72 @@ func formatDuration(fi []interface{}, idx int) string {
 	return fmt.Sprintf("%dhr %dmin", h, m)
 }
 
-// extractPrice reads k[1][0][1] (float64).
-func extractPrice(k []interface{}) float64 {
+// extractPriceAndCurrency reads the price from k[1][0][1] and the currency
+// from the proto-encoded string at k[1][1].
+//
+// In the Google Flights response, k[1] looks like:
+//
+//	[[null, <price_float>], "<base64_proto>"]
+//
+// The base64 proto encodes a Price message where field 3 (wire type 2) holds
+// the 3-character currency code (e.g. "USD", "TWD", "JPY").
+// We extract it with a simple byte-pattern search: 0x1a 0x03 <3 uppercase bytes>.
+//
+// Falls back to "USD" if the proto string is missing or unparseable.
+func extractPriceAndCurrency(k []interface{}) (float64, string) {
 	if len(k) < 2 {
-		return 0
+		return 0, "USD"
 	}
 	l1 := toSlice(k[1])
 	if len(l1) == 0 {
-		return 0
+		return 0, "USD"
 	}
+
+	// Price
 	l2 := toSlice(l1[0])
-	if len(l2) < 2 {
-		return 0
+	var price float64
+	if len(l2) >= 2 {
+		price, _ = l2[1].(float64)
 	}
-	v, _ := l2[1].(float64)
-	return v
+
+	// Currency from proto string at k[1][1]
+	currency := "USD"
+	if len(l1) >= 2 {
+		if protoB64, ok := l1[1].(string); ok && protoB64 != "" {
+			if cur := decodeCurrencyFromProto(protoB64); cur != "" {
+				currency = cur
+			}
+		}
+	}
+
+	return price, currency
 }
+
+// decodeCurrencyFromProto decodes a base64-encoded proto string and extracts
+// the 3-character currency code from field 3 (tag byte 0x1a, length 0x03).
+func decodeCurrencyFromProto(b64 string) string {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		// Try URL-safe base64 as fallback
+		data, err = base64.RawURLEncoding.DecodeString(b64)
+		if err != nil {
+			return ""
+		}
+	}
+	// Scan for proto field 3 (type bytes): tag = 0x1a, followed by length 0x03
+	// then 3 ASCII uppercase letters — the ISO 4217 currency code.
+	for i := 0; i+4 < len(data); i++ {
+		if data[i] == 0x1a && data[i+1] == 0x03 {
+			a, b, c := data[i+2], data[i+3], data[i+4]
+			if isUpperASCII(a) && isUpperASCII(b) && isUpperASCII(c) {
+				return string([]byte{a, b, c})
+			}
+		}
+	}
+	return ""
+}
+
+func isUpperASCII(b byte) bool { return b >= 'A' && b <= 'Z' }
 
 // extractPriceTrend does a best-effort search for a price trend label.
 func extractPriceTrend(inner []interface{}) string {

@@ -32,7 +32,9 @@ const (
 )
 
 const (
-	rpcEndpoint = "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults"
+	// rpcEndpoint includes curr=USD&hl=en to request USD prices in English.
+	// This is belt-and-suspenders alongside the currency extraction in parser.go.
+	rpcEndpoint = "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?curr=USD&hl=en"
 	userAgent   = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	timeout     = 30 * time.Second
 
