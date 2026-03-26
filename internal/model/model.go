@@ -54,12 +54,13 @@ type SearchResult struct {
 
 // DatePrice represents the cheapest flight found for a specific date.
 type DatePrice struct {
-	Date     string  `json:"date"`
-	Price    float64 `json:"price"`
-	Currency string  `json:"currency"`
-	Airline  string  `json:"airline"`
-	Duration string  `json:"duration"`
-	Stops    int     `json:"stops"`
+	Date       string  `json:"date"`
+	ReturnDate string  `json:"return_date,omitempty"` // set when round-trip (--stay N); empty for one-way
+	Price      float64 `json:"price"`
+	Currency   string  `json:"currency"`
+	Airline    string  `json:"airline"`
+	Duration   string  `json:"duration"`
+	Stops      int     `json:"stops"`
 }
 
 // DateRangeParams holds parameters for a date-range price search.
@@ -71,6 +72,7 @@ type DateRangeParams struct {
 	Adults      int
 	Children    int
 	Class       SeatClass
+	StayDays    int // if > 0, search round-trip with this many days between outbound and return
 }
 
 // DateRangeResult holds cheapest-flight data across a date range.

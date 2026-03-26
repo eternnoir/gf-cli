@@ -119,7 +119,8 @@ func (s *GoogleFlightsScraper) SearchDateRange(params model.DateRangeParams) (*m
 	}
 
 	for d := 0; d < days; d++ {
-		date := from.AddDate(0, 0, d).Format(layout)
+		departDate := from.AddDate(0, 0, d)
+		date := departDate.Format(layout)
 
 		searchParams := model.SearchParams{
 			Origin:      params.Origin,
@@ -129,6 +130,9 @@ func (s *GoogleFlightsScraper) SearchDateRange(params model.DateRangeParams) (*m
 			Children:    params.Children,
 			Class:       params.Class,
 			Limit:       1, // cheapest only
+		}
+		if params.StayDays > 0 {
+			searchParams.ReturnDate = departDate.AddDate(0, 0, params.StayDays).Format(layout)
 		}
 
 		sr, err := s.Search(searchParams)
@@ -141,14 +145,18 @@ func (s *GoogleFlightsScraper) SearchDateRange(params model.DateRangeParams) (*m
 		}
 
 		cheapest := sr.Flights[0]
-		result.Dates = append(result.Dates, model.DatePrice{
+		dp := model.DatePrice{
 			Date:     date,
 			Price:    cheapest.Price,
 			Currency: cheapest.Currency,
 			Airline:  cheapest.Airline,
 			Duration: cheapest.Duration,
 			Stops:    cheapest.Stops,
-		})
+		}
+		if params.StayDays > 0 {
+			dp.ReturnDate = departDate.AddDate(0, 0, params.StayDays).Format(layout)
+		}
+		result.Dates = append(result.Dates, dp)
 
 		if d < days-1 {
 			time.Sleep(dateRangeDelay)

@@ -5,47 +5,71 @@
 ## When to use
 
 Use this tool when asked to:
-- Find flights between two airports on a specific date
+- Find flights between two airports on a specific date (one-way or round trip)
+- Search round-trip fares — specify departure date + return date, or use date-range to find cheapest departure day with a fixed stay length
+- Find the cheapest day to fly within a date range (one-way or round trip with `--stay`)
 - Compare flight prices, airlines, and durations
-- Search round-trip fares with a return date
-- Find the cheapest day to fly within a date range
-- Output flight data as JSON for further processing
+- Output flight data as JSON for further processing or analysis
+
+> **Round trip is the most common use case.** Always use `--return` (specific dates) or `--stay` (date range) unless the user explicitly wants one-way.
 
 ## Commands
 
-### Search flights on a specific date
+### 1. Search flights on a specific date
 
 ```bash
 gf-cli [ORIGIN] [DESTINATION] --date YYYY-MM-DD [flags]
 ```
 
-Key flags: `--date` (required), `--return` (round trip), `--adults`, `--children`, `--class` (economy/premium-economy/business/first), `--limit`, `--json`
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--date` | `-d` | required | Departure date (YYYY-MM-DD) |
+| `--return` | `-r` | — | **Return date for round trip (YYYY-MM-DD).** When set, returns combined outbound + return price. Omit for one-way. |
+| `--adults` | `-a` | 1 | Number of adults |
+| `--children` | `-c` | 0 | Number of children |
+| `--class` | `-C` | economy | Seat class: `economy` / `premium-economy` / `business` / `first` |
+| `--limit` | `-l` | 10 | Max results |
+| `--json` | — | false | JSON output (recommended for programmatic use) |
 
-### Find cheapest date in a range
+### 2. Find cheapest departure date across a range
 
 ```bash
 gf-cli dates [ORIGIN] [DESTINATION] --from YYYY-MM-DD --to YYYY-MM-DD [flags]
 ```
 
-Maximum range: 61 days. Use `--json` for machine-readable output.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Start of departure date range (YYYY-MM-DD) |
+| `--to` | required | End of departure date range (YYYY-MM-DD, max 61 days from `--from`) |
+| `--stay` | 0 (one-way) | **Number of days to stay at destination for round-trip search.** Each departure date is automatically paired with `departure + N days` as the return date. Set to 0 or omit for one-way. |
+| `--adults` | 1 | Number of adults |
+| `--children` | 0 | Number of children |
+| `--class` | economy | Seat class |
+| `--json` | false | JSON output |
 
 ## Examples
 
 ```bash
-# Cheapest one-way flights TPE→NRT on May 1
+# Round trip on specific dates (most common)
+gf-cli TPE NRT --date 2026-05-01 --return 2026-05-08
+
+# Round trip, business class, 2 adults
+gf-cli JFK LHR --date 2026-06-15 --return 2026-06-22 --class business --adults 2
+
+# Round trip + JSON output (for Agent use)
+gf-cli TPE NRT --date 2026-05-01 --return 2026-05-08 --json
+
+# One-way (explicit)
 gf-cli TPE NRT --date 2026-05-01
 
-# Business class round trip JFK→LHR
-gf-cli JFK LHR --date 2026-06-15 --return 2026-06-22 --class business
+# Find cheapest round-trip departure in May, staying 7 days (most common dates use case)
+gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --stay 7
 
-# JSON output for scripting or Agent use
-gf-cli TPE NRT --date 2026-05-01 --json
+# Same, JSON output for Agent
+gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --stay 7 --json
 
-# Find cheapest day to fly in May
+# Find cheapest one-way day in May (no --stay)
 gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31
-
-# JSON date range (Agent friendly)
-gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --json
 ```
 
 ## JSON output schema
@@ -57,6 +81,7 @@ gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --json
   "origin": "TPE",
   "destination": "NRT",
   "date": "2026-05-01",
+  "return_date": "2026-05-08",
   "flights": [
     {
       "airline": "Scoot",
@@ -64,12 +89,15 @@ gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --json
       "arrival_time": "20:00",
       "duration": "3hr 30min",
       "stops": 0,
-      "price": 151,
-      "currency": "USD"
+      "price": 312,
+      "currency": "USD",
+      "arrival_date": ""
     }
   ]
 }
 ```
+
+> `return_date` is present when `--return` was used. `arrival_date` is non-empty only when the flight arrives on a different calendar day.
 
 ### Date range search (`gf-cli dates ... --json`)
 
@@ -78,11 +106,11 @@ gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --json
   "origin": "TPE",
   "destination": "NRT",
   "from_date": "2026-05-01",
-  "to_date": "2026-05-07",
+  "to_date": "2026-05-31",
   "dates": [
     {
       "date": "2026-05-03",
-      "price": 107,
+      "price": 261,
       "currency": "USD",
       "airline": "Jetstar",
       "duration": "3hr 20min",
@@ -92,8 +120,11 @@ gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --json
 }
 ```
 
+> When `--stay` is used, `price` reflects the combined round-trip fare (outbound + return). The `date` field is the **departure date**; return date = `date + stay days`.
+
 ## Notes
 
 - Prices are fetched live from Google Flights; results may vary by time of request
-- Airport codes follow IATA format (e.g. TPE, NRT, JFK, LHR)
-- `arrival_date` field appears in JSON only when the flight arrives on a different day
+- Airport codes follow IATA format (e.g. TPE, NRT, JFK, LHR, SFO, SIN)
+- `dates` command makes one API call per day in the range — for a 31-day range, ~31 requests with 500ms spacing (~15 seconds total)
+- If Google rate-limits a request (HTTP 429), that date is silently skipped in the results

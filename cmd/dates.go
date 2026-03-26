@@ -20,12 +20,13 @@ import (
 )
 
 var (
-	flagFromDate    string
-	flagToDate      string
-	flagDatesClass  string
-	flagDatesAdults int
+	flagFromDate      string
+	flagToDate        string
+	flagDatesClass    string
+	flagDatesAdults   int
 	flagDatesChildren int
-	flagDatesJSON   bool
+	flagDatesJSON     bool
+	flagStayDays      int
 )
 
 var datesCmd = &cobra.Command{
@@ -34,10 +35,14 @@ var datesCmd = &cobra.Command{
 	Long: `Search for the cheapest flight option for each day in a date range.
 Useful for flexible travel planning — quickly see which dates are cheapest.
 
+Use --stay N to search round-trip prices (N = number of days at destination).
+Without --stay, each date is searched as a one-way flight.
+
 Maximum range: 61 days.
 
 Example:
   gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31
+  gf-cli dates TPE NRT --from 2026-05-01 --to 2026-05-31 --stay 7
   gf-cli dates JFK LHR --from 2026-06-01 --to 2026-06-30 --class business --json`,
 	Args: cobra.ExactArgs(2),
 	RunE: runDateRange,
@@ -50,6 +55,7 @@ func init() {
 	datesCmd.Flags().IntVarP(&flagDatesAdults, "adults", "a", 1, "Number of adults")
 	datesCmd.Flags().IntVarP(&flagDatesChildren, "children", "c", 0, "Number of children")
 	datesCmd.Flags().BoolVar(&flagDatesJSON, "json", false, "Output as JSON")
+	datesCmd.Flags().IntVar(&flagStayDays, "stay", 0, "Round-trip: number of days to stay at destination (0 = one-way)")
 
 	_ = datesCmd.MarkFlagRequired("from")
 	_ = datesCmd.MarkFlagRequired("to")
@@ -83,6 +89,10 @@ func runDateRange(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if flagStayDays < 0 {
+		return fmt.Errorf("--stay must be 0 or greater")
+	}
+
 	params := model.DateRangeParams{
 		Origin:      origin,
 		Destination: destination,
@@ -91,6 +101,7 @@ func runDateRange(cmd *cobra.Command, args []string) error {
 		Adults:      flagDatesAdults,
 		Children:    flagDatesChildren,
 		Class:       seatClass,
+		StayDays:    flagStayDays,
 	}
 
 	s := scraper.NewGoogleFlightsScraper()

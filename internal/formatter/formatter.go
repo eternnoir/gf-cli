@@ -55,8 +55,16 @@ func PrintJSON(result *model.SearchResult) error {
 
 // PrintDateRangeText renders a DateRangeResult as a human-readable price table.
 func PrintDateRangeText(result *model.DateRangeResult) {
-	fmt.Printf("📅 %s → %s  |  %s to %s\n",
+	// Detect round-trip mode from first result that has ReturnDate set.
+	isRoundTrip := len(result.Dates) > 0 && result.Dates[0].ReturnDate != ""
+
+	header := fmt.Sprintf("📅 %s → %s  |  %s to %s",
 		result.Origin, result.Destination, result.FromDate, result.ToDate)
+	if isRoundTrip {
+		// Calculate stay length from first entry for the header label.
+		header += "  (round trip)"
+	}
+	fmt.Println(header)
 	fmt.Println(divider)
 
 	if len(result.Dates) == 0 {
@@ -78,8 +86,12 @@ func PrintDateRangeText(result *model.DateRangeResult) {
 			tag = " ⭐ cheapest"
 		}
 		stopLabel := formatStops(dp.Stops)
+		dateLabel := dp.Date
+		if dp.ReturnDate != "" {
+			dateLabel = dp.Date + " → " + dp.ReturnDate
+		}
 		fmt.Printf("  %s  💰 %s %.0f  ✈ %s  ⏱ %s  %s%s\n",
-			dp.Date, dp.Currency, dp.Price, dp.Airline, dp.Duration, stopLabel, tag)
+			dateLabel, dp.Currency, dp.Price, dp.Airline, dp.Duration, stopLabel, tag)
 	}
 	fmt.Println(divider)
 	fmt.Printf("Total: %d dates with available flights\n", len(result.Dates))
