@@ -1,25 +1,30 @@
 // Package scraper — parser.go
 //
-// Parses Google Flights HTML responses.
+// Parses Google Flights RPC API JSON responses.
 //
-// Google embeds flight data as JSON inside a <script class="ds:1"> tag.
-// The content looks like:  AF_initDataCallback({key:"ds:1", ... data:[...], ...})
-// We extract the array after "data:" and navigate its nested structure.
+// The POST API returns an outer JSON array where parsed[0][2] is itself a
+// JSON string (double-encoded). After unwrapping, the inner payload has the
+// same structure as what the HTML approach embedded in the ds:1 script tag.
 //
-// Verified payload structure (debug-confirmed against live Google Flights response):
+// Verified payload structure (debug-confirmed against live response):
 //
-//   payload[3][0]          — list of flight options, each element is k
-//   k[0]                   — main flight info block (length ~25)
-//     k[0][1]              — []string of airline names (e.g. ["Scoot"])
-//     k[0][2]              — []segments (count - 1 = stops)
-//     k[0][3]              — origin IATA code (string)
-//     k[0][4]              — departure date [year, month, day]
-//     k[0][5]              — departure time [hour, minute]
-//     k[0][6]              — destination IATA code (string)
-//     k[0][7]              — arrival date [year, month, day]
-//     k[0][8]              — arrival time [hour, minute]
-//     k[0][9]              — total duration in minutes (float64)
-//   k[1][0][1]             — price (float64, USD)
+//	outer JSON          — top-level array
+//	outer[0][2]         — JSON string, must be parsed again → inner
+//	inner[2][0]         — "best" flight options list
+//	inner[3][0]         — additional flight options list
+//	k                   — one flight option entry (from either list)
+//	  k[0]              — main flight info block
+//	    k[0][0]         — airline IATA code (string)
+//	    k[0][1]         — []string of airline names, e.g. ["Scoot"]
+//	    k[0][2]         — []segments (count - 1 = stops)
+//	    k[0][3]         — origin IATA code (string)
+//	    k[0][4]         — departure date [year, month, day]
+//	    k[0][5]         — departure time [hour, minute]
+//	    k[0][6]         — destination IATA code (string)
+//	    k[0][7]         — arrival date [year, month, day]
+//	    k[0][8]         — arrival time [hour, minute]
+//	    k[0][9]         — total duration in minutes (float64)
+//	  k[1][0][1]        — price (float64)
 package scraper
 
 import (
@@ -27,191 +32,126 @@ import (
 	"fmt"
 	"strings"
 
-	"golang.org/x/net/html"
-
 	"github.com/eternnoir/gf-cli/internal/model"
 )
 
-// parseFlights extracts flight results and a price-trend label from raw HTML.
-func parseFlights(htmlContent string) ([]model.Flight, string, error) {
-	scriptText, err := extractDS1Script(htmlContent)
+// parseFlights extracts flight results and a price-trend label from the raw
+// (anti-XSSI-stripped) JSON string returned by the POST API.
+func parseFlights(raw string) ([]model.Flight, string, error) {
+	inner, err := extractInnerPayload(raw)
 	if err != nil {
 		return nil, "", err
 	}
 
-	payload, err := extractPayload(scriptText)
+	flights, err := buildFlights(inner)
 	if err != nil {
 		return nil, "", err
 	}
 
-	flights, err := buildFlights(payload)
-	if err != nil {
-		return nil, "", err
-	}
-
-	priceTrend := extractPriceTrend(payload)
+	priceTrend := extractPriceTrend(inner)
 	return flights, priceTrend, nil
 }
 
-// extractDS1Script finds <script class="ds:1"> and returns its text content.
-func extractDS1Script(htmlContent string) (string, error) {
-	doc, err := html.Parse(strings.NewReader(htmlContent))
-	if err != nil {
-		return "", fmt.Errorf("HTML parse error: %w", err)
-	}
-
-	var content string
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if content != "" {
-			return
-		}
-		if n.Type == html.ElementNode && n.Data == "script" {
-			for _, a := range n.Attr {
-				if a.Key == "class" {
-					for _, cls := range strings.Fields(a.Val) {
-						if cls == "ds:1" {
-							if n.FirstChild != nil {
-								content = n.FirstChild.Data
-							}
-							return
-						}
-					}
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-
-	if content == "" {
-		return "", fmt.Errorf("script tag 'ds:1' not found — Google may have blocked the request or changed their page structure")
-	}
-	return content, nil
-}
-
-// extractPayload parses the JSON array that follows "data:" inside the script text.
-func extractPayload(scriptText string) ([]interface{}, error) {
-	idx := strings.Index(scriptText, "data:")
-	if idx < 0 {
-		return nil, fmt.Errorf("'data:' key not found in script content")
-	}
-
-	rest := strings.TrimSpace(scriptText[idx+5:])
-	if len(rest) == 0 || rest[0] != '[' {
-		return nil, fmt.Errorf("expected JSON array after 'data:', got: %.40s", rest)
-	}
-
-	end := findClosingBracket(rest)
-	if end < 0 {
-		return nil, fmt.Errorf("unmatched brackets in data payload")
-	}
-
-	var payload []interface{}
-	if err := json.Unmarshal([]byte(rest[:end+1]), &payload); err != nil {
-		return nil, fmt.Errorf("JSON unmarshal error: %w", err)
-	}
-	return payload, nil
-}
-
-// findClosingBracket returns the index of the bracket that closes rest[0].
-func findClosingBracket(s string) int {
-	depth := 0
-	inStr := false
-	escaped := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if c == '\\' && inStr {
-			escaped = true
-			continue
-		}
-		if c == '"' {
-			inStr = !inStr
-			continue
-		}
-		if inStr {
-			continue
-		}
-		switch c {
-		case '[', '{':
-			depth++
-		case ']', '}':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// buildFlights navigates the payload and constructs []model.Flight.
+// extractInnerPayload unwraps the double-encoded JSON response.
 //
-// Key structure (verified against live response):
-//
-//	payload[3][0] → slice of flight options k
-//	k[0]          → flight info block
-//	k[1][0][1]    → price (float64)
-func buildFlights(payload []interface{}) ([]model.Flight, error) {
-	flightList := nestedSlice(payload, 3, 0)
-	if flightList == nil {
-		return nil, fmt.Errorf("flight data section not found (payload[3][0])")
+// The outer JSON is an array; outer[0][2] is a JSON string that must be
+// parsed a second time to get the actual flight data payload.
+func extractInnerPayload(raw string) ([]interface{}, error) {
+	var outer []interface{}
+	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
+		return nil, fmt.Errorf("outer JSON parse error: %w", err)
 	}
 
+	if len(outer) == 0 {
+		return nil, fmt.Errorf("empty outer response")
+	}
+
+	first, ok := outer[0].([]interface{})
+	if !ok || len(first) < 3 {
+		return nil, fmt.Errorf("unexpected outer[0] structure")
+	}
+
+	innerStr, ok := first[2].(string)
+	if !ok || innerStr == "" {
+		return nil, fmt.Errorf("outer[0][2] is not a string or is empty")
+	}
+
+	var inner []interface{}
+	if err := json.Unmarshal([]byte(innerStr), &inner); err != nil {
+		return nil, fmt.Errorf("inner JSON parse error: %w", err)
+	}
+
+	return inner, nil
+}
+
+// buildFlights navigates the inner payload and constructs []model.Flight.
+//
+// Flight options appear at inner[2][0] ("best flights") and inner[3][0]
+// ("more flights").  We collect from both lists, deduplicating by
+// (airline, departure_time, price).
+func buildFlights(inner []interface{}) ([]model.Flight, error) {
 	var flights []model.Flight
-	for _, raw := range flightList {
-		k := toSlice(raw)
-		if len(k) == 0 {
+	seen := make(map[string]bool)
+
+	for _, listIdx := range []int{2, 3} {
+		flightList := nestedSlice(inner, listIdx, 0)
+		if flightList == nil {
 			continue
 		}
+		for _, raw := range flightList {
+			k := toSlice(raw)
+			if len(k) == 0 {
+				continue
+			}
 
-		fi := toSlice(k[0]) // fi = k[0], main flight info
-		if len(fi) < 10 {
-			continue
+			fi := toSlice(k[0]) // fi = k[0], main flight info block
+			if len(fi) < 10 {
+				continue
+			}
+
+			airline := extractAirlineNames(fi)
+			segments := toSlice(fi[2])
+			stops := 0
+			if len(segments) > 1 {
+				stops = len(segments) - 1
+			}
+
+			depTime := formatTime(fi, 5)
+			arrTime := formatTime(fi, 8)
+			duration := formatDuration(fi, 9)
+			depDate := formatDate(fi, 4)
+			arrDate := formatDate(fi, 7)
+
+			if arrDate == depDate {
+				arrDate = ""
+			}
+
+			price := extractPrice(k)
+
+			// Deduplicate
+			key := fmt.Sprintf("%s|%s|%.0f", airline, depTime, price)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			flights = append(flights, model.Flight{
+				Airline:       airline,
+				DepartureTime: depTime,
+				ArrivalTime:   arrTime,
+				ArrivalDate:   arrDate,
+				Duration:      duration,
+				Stops:         stops,
+				Price:         price,
+				Currency:      "USD",
+			})
 		}
-
-		airline := extractAirlineNames(fi)
-		segments := toSlice(fi[2])
-		stops := 0
-		if len(segments) > 1 {
-			stops = len(segments) - 1
-		}
-
-		depTime := formatTime(fi, 5)
-		arrTime := formatTime(fi, 8)
-		duration := formatDuration(fi, 9)
-		depDate := formatDate(fi, 4)
-		arrDate := formatDate(fi, 7)
-
-		// Suppress arrDate if it equals depDate (same-day arrival is the norm)
-		if arrDate == depDate {
-			arrDate = ""
-		}
-
-		price := extractPrice(k)
-
-		flights = append(flights, model.Flight{
-			Airline:       airline,
-			DepartureTime: depTime,
-			ArrivalTime:   arrTime,
-			ArrivalDate:   arrDate,
-			Duration:      duration,
-			Stops:         stops,
-			Price:         price,
-			Currency:      "USD",
-		})
 	}
+
 	return flights, nil
 }
 
 // extractAirlineNames reads fi[1] which is []string of airline names.
-// Example: fi[1] = ["Scoot"] or ["Delta", "KLM"] for codeshare.
 func extractAirlineNames(fi []interface{}) string {
 	if len(fi) < 2 {
 		return ""
@@ -227,7 +167,6 @@ func extractAirlineNames(fi []interface{}) string {
 }
 
 // formatTime reads fi[idx] = [hour, minute] and returns "HH:MM".
-// Google omits the minute element when it is 0, so [9] means 09:00.
 func formatTime(fi []interface{}, idx int) string {
 	if idx >= len(fi) {
 		return ""
@@ -300,9 +239,9 @@ func extractPrice(k []interface{}) float64 {
 }
 
 // extractPriceTrend does a best-effort search for a price trend label.
-func extractPriceTrend(payload []interface{}) string {
+func extractPriceTrend(inner []interface{}) string {
 	for _, idx := range []int{0, 3} {
-		s := nestedSlice(payload, idx, 3)
+		s := nestedSlice(inner, idx, 3)
 		for _, v := range s {
 			if t, ok := v.(string); ok {
 				lower := strings.ToLower(t)
