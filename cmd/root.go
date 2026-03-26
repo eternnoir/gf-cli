@@ -26,13 +26,14 @@ Retrieve prices, times, and airline info straight from your terminal.`,
 
 // flags
 var (
-	flagDate       string
-	flagReturn     string
-	flagAdults     int
-	flagChildren   int
-	flagClass      string
-	flagLimit      int
-	flagOutputFmt  string
+	flagDate      string
+	flagReturn    string
+	flagAdults    int
+	flagChildren  int
+	flagClass     string
+	flagLimit     int
+	flagOutputFmt string
+	flagJSON      bool // shorthand for --output json, easier for Agent/script consumers
 )
 
 func init() {
@@ -43,6 +44,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&flagClass, "class", "C", "economy", "Seat class (economy|premium-economy|business|first)")
 	rootCmd.Flags().IntVarP(&flagLimit, "limit", "l", 10, "Maximum number of results")
 	rootCmd.Flags().StringVarP(&flagOutputFmt, "output", "o", "text", "Output format (text|json)")
+	rootCmd.Flags().BoolVar(&flagJSON, "json", false, "Output as JSON (shorthand for --output json)")
 
 	_ = rootCmd.MarkFlagRequired("date")
 }
@@ -82,6 +84,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	seatClass, err := formatter.ValidateSeatClass(flagClass)
 	if err != nil {
 		return err
+	}
+
+	// --json flag takes precedence over --output flag.
+	if flagJSON {
+		flagOutputFmt = "json"
 	}
 
 	// Validate output format.
